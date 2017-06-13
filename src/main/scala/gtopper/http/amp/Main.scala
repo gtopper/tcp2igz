@@ -20,9 +20,14 @@ object Main {
     val targetHost = config.getString("target.host")
     val targetPort = config.getInt("target.port")
     val clientFlow = Flow[HttpRequest]
+      .map { req => req.copy(headers = req.headers.filterNot(_.name() == "Timeout-Access")) }
       .zipWithIndex
       .via(Http().cachedHostConnectionPool[Long](targetHost, targetPort))
       .to(Sink.ignore)
+
+    val printPeriod = config.getInt("print-period")
+
+    val startTime = System.currentTimeMillis()
 
     val requestHandler: Flow[HttpRequest, HttpResponse, Any] =
       Flow.fromGraph(GraphDSL.create() { implicit builder =>
@@ -31,7 +36,13 @@ object Main {
 
         bcast.out(0) ~> clientFlow
         FlowShape(bcast.in, bcast.out(1))
-      }).map(_ => HttpResponse(StatusCodes.OK))
+      }).zipWithIndex.map { case (response, i) =>
+        if (i % printPeriod == 0) {
+          val runtime = System.currentTimeMillis() - startTime
+          println(s"$i / $runtime millis $response")
+        }
+        HttpResponse(StatusCodes.OK)
+      }
 
     val bindingFuture = Http().bindAndHandle(requestHandler, "localhost", 8080)
 
