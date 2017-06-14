@@ -1,6 +1,7 @@
 package io.iguaz.tcp2igz
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
 import scala.io.StdIn
@@ -56,24 +57,48 @@ object Main {
       }
     }
 
-    val conversionFlow: Flow[ByteString, HttpRequest, NotUsed] = Flow[ByteString].mapConcat { byteString =>
-      byteString.decodeString("UTF-8").split('\n').toList
-    }.map { list =>
-      val values = list.split(',')
-      val body = Json.obj(
-        "Key" -> Json.obj("id" -> Json.obj("S" -> JsString(values.head))),
-        "Item" -> JsObject(values.zip(fields).map { case (value, (name, igzType)) =>
-          name -> Json.obj(igzType -> JsString(value))
-        })
-      ).toString
+    var carryoverSB = new StringBuilder
+    var carryoverAcc = mutable.ListBuffer.empty[String]
 
-      HttpRequest(
-        method = HttpMethods.PUT,
-        uri = uri,
-        headers = headers,
-        entity = HttpEntity(ContentTypes.`application/json`, body)
-      )
-    }
+    val conversionFlow: Flow[ByteString, HttpRequest, NotUsed] = Flow[ByteString]
+      .mapConcat { byteString => // TODO de-hack this with something like StatefulMapConcat
+        val bb = byteString.asByteBuffer
+        var res = mutable.ListBuffer.empty[List[String]]
+        var acc = carryoverAcc
+        var b = carryoverSB
+        while (bb.hasRemaining) {
+          val c = bb.get.toChar
+          if (c == '\n') {
+            acc += b.toString
+            b = new StringBuilder
+            res += acc.toList
+            acc = mutable.ListBuffer.empty[String]
+          } else if (c == ',') {
+            acc += b.toString
+            b = new StringBuilder
+          } else {
+            b.append(c)
+          }
+        }
+        carryoverSB = b
+        carryoverAcc = acc
+        res.toList
+      }
+      .map { values =>
+        val body = Json.obj(
+          "Key" -> Json.obj("id" -> Json.obj("S" -> JsString(values.head))),
+          "Item" -> JsObject(values.zip(fields).map { case (value, (name, igzType)) =>
+            name -> Json.obj(igzType -> JsString(value))
+          })
+        ).toString
+
+        HttpRequest(
+          method = HttpMethods.PUT,
+          uri = uri,
+          headers = headers,
+          entity = HttpEntity(ContentTypes.`application/json`, body)
+        )
+      }
 
     val bindingFuture: Future[OutgoingConnection] = Source.fromIterator(() => Iterator.continually(ByteString()))
       .viaMat(Tcp().outgoingConnection(host = sourceHost, port = sourcePort)) { case (_, mat2) => mat2 }
