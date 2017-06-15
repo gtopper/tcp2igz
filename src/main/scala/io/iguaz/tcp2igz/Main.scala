@@ -57,33 +57,8 @@ object Main {
       }
     }
 
-    var carryoverSB = new StringBuilder
-    var carryoverAcc = mutable.ListBuffer.empty[String]
-
     val conversionFlow: Flow[ByteString, HttpRequest, NotUsed] = Flow[ByteString]
-      .mapConcat { byteString => // TODO de-hack this with something like StatefulMapConcat
-        val bb = byteString.asByteBuffer
-        var res = mutable.ListBuffer.empty[List[String]]
-        var acc = carryoverAcc
-        var b = carryoverSB
-        while (bb.hasRemaining) {
-          val c = bb.get.toChar
-          if (c == '\n') {
-            acc += b.toString
-            b = new StringBuilder
-            res += acc.toList
-            acc = mutable.ListBuffer.empty[String]
-          } else if (c == ',') {
-            acc += b.toString
-            b = new StringBuilder
-          } else {
-            b.append(c)
-          }
-        }
-        carryoverSB = b
-        carryoverAcc = acc
-        res.toList
-      }
+      .statefulMapConcat(() => conversionFunction)
       .map { values =>
         val body = Json.obj(
           "Key" -> Json.obj("id" -> Json.obj("S" -> JsString(values.head))),
@@ -114,5 +89,30 @@ object Main {
     println(s"Reading TCP data from $sourceHost:$sourcePort\nType q and then RETURN to stop...")
     while (StdIn.readLine() != "q") {} // let it run until user exits
     system.terminate()
+  }
+
+  def conversionFunction: ByteString => List[List[String]] = {
+    val b = new StringBuilder
+    val acc = mutable.ListBuffer.empty[String]
+
+    { byteString =>
+      val bb = byteString.asByteBuffer
+      var res = mutable.ListBuffer.empty[List[String]]
+      while (bb.hasRemaining) {
+        val c = bb.get.toChar
+        if (c == '\n') {
+          acc += b.toString
+          b.clear()
+          res += acc.toList
+          acc.clear()
+        } else if (c == ',') {
+          acc += b.toString
+          b.clear()
+        } else {
+          b.append(c)
+        }
+      }
+      res.toList
+    }
   }
 }
