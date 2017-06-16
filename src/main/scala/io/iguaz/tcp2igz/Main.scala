@@ -75,7 +75,7 @@ object Main {
         )
       }
 
-    val bindingFuture: Future[OutgoingConnection] = Source.fromIterator(() => Iterator.continually(ByteString()))
+    val bindingFuture: Future[OutgoingConnection] = Source.fromIterator(() => Iterator.continually(ByteString.empty))
       .viaMat(Tcp().outgoingConnection(host = sourceHost, port = sourcePort)) { case (_, mat2) => mat2 }
       .via(conversionFlow)
       .via(clientFlow)
