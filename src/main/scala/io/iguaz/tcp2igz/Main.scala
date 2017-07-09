@@ -7,6 +7,7 @@ import scala.concurrent.{Await, Future}
 import scala.io.StdIn
 import scala.util.Try
 
+import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.HttpHeader.ParsingResult.Ok
@@ -15,7 +16,6 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Tcp.OutgoingConnection
 import akka.stream.scaladsl.{Flow, Sink, Source, Tcp}
 import akka.util.ByteString
-import akka.{Done, NotUsed}
 import com.typesafe.config.{ConfigFactory, ConfigList}
 import play.api.libs.json.{JsObject, JsString, Json}
 
@@ -51,7 +51,7 @@ object Main {
       .zipWithIndex
       .via(Http().cachedHostConnectionPool[Long](targetHost, targetPort))
 
-    val printSink: Sink[(Try[HttpResponse], Long), Future[Done]] = Sink.foreach { case (response, i) =>
+    val printFlow = Flow[(Try[HttpResponse], Long)].map { case (response, i) =>
       if (i % printPeriod == 0) {
         println(s"${DateTime.now}: $i | $response")
       }
@@ -79,7 +79,8 @@ object Main {
       .viaMat(Tcp().outgoingConnection(host = sourceHost, port = sourcePort)) { case (_, mat2) => mat2 }
       .via(conversionFlow)
       .via(clientFlow)
-      .toMat(printSink) { case (mat1, _) => mat1 }
+      .via(printFlow)
+      .toMat(Sink.ignore) { case (mat1, _) => mat1 }
       .run()
 
     bindingFuture.failed.foreach(_ => system.terminate())
